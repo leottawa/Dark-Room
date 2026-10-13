@@ -1,0 +1,17 @@
+{
+ "started": "20261013-165640",
+ "cases": "eval/cases/dev.json (all 31)",
+ "arms": [
+  "oracle",
+  "pipeline",
+  "naive",
+  "engineered"
+ ],
+ "repeats": 1,
+ "model": "mistralai/mistral-small-3.2-24b-instruct",
+ "grader_model": "mistralai/mistral-small-3.2-24b-instruct",
+ "temperature": 0,
+ "seed": 7,
+ "parts": 4,
+ "note": "Run as 4 parallel processes over disjoint case subsets, then merged."
+}

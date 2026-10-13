@@ -1,0 +1,21 @@
+arm                runs   usable  critical  errors  median s     mean $  calls
+oracle               31     100%         0       0      0.00   0.000000    0.0
+pipeline             31      97%         1       0     10.98   0.000213    2.1
+naive                31      19%        22       1     10.80   0.000096    1.0
+engineered           31      23%        11       2     12.52   0.000126    1.0
+3 baseline run(s) could not be audited by the grader and count as errors above, not as baseline mistakes.
+
+Usable share by category
+arm                       boundary      infeasible  missing_inform  outside_catalo        phrasing      preference        pressure         routine
+oracle                         4/4             7/7             4/4             5/5             3/3             3/3             1/1             4/4
+pipeline                       4/4             7/7             4/4             5/5             3/3             2/3             1/1             4/4
+naive                          2/4             0/7             0/4             0/5             1/3             1/3             0/1             2/4
+engineered                     2/4             0/7             1/4             1/5             1/3             1/3             0/1             1/4
+
+Failed checks (count of runs)
+oracle            none
+pipeline          route 1, venue! 1, services! 1, total! 1
+naive             route! 15, reasons 11, alternatives 10, no_needless_assumption 6, notices 5, total! 5, no_promise! 3, questions 3, assumptions_flagged 3, venue! 2, services! 2, no_unsuitable_venue! 1
+engineered        no_needless_assumption 14, alternatives 11, reasons 7, route! 6, notices 5, total! 5, venue! 4, questions 3, assumptions_flagged 1, services! 1, no_promise! 1, no_unsuitable_venue! 1
+
+! marks a critical failure: an error that would mislead the client if the draft were sent.
