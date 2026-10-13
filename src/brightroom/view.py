@@ -4,10 +4,15 @@ from __future__ import annotations
 
 import html
 import re
+import unicodedata
 from difflib import SequenceMatcher
 
 from .catalogue import Catalogue, hours, money
 from .models import Brief, FieldIssue
+from .textutil import _PUNCTUATION
+
+# Typographic variants the extraction audit treats as equal (see textutil.normalise).
+_VARIANTS = {"'": "['‘’]", '"': '["“”]', "-": "[-–—]"}
 
 NOT_STATED = "not stated"
 
@@ -74,7 +79,8 @@ def highlight(enquiry: str, quotes: list[str]) -> str:
     """The enquiry as HTML with every quoted span marked, so the reviewer sees what was read."""
     spans: list[tuple[int, int]] = []
     for quote in quotes:
-        match = re.search(re.escape(quote.strip()), enquiry, re.IGNORECASE)
+        pattern = _quote_pattern(quote)
+        match = re.search(pattern, enquiry, re.IGNORECASE) if pattern else None
         if match:
             spans.append(match.span())
     merged: list[list[int]] = []
@@ -90,6 +96,18 @@ def highlight(enquiry: str, quotes: list[str]) -> str:
         cursor = end
     out.append(html.escape(enquiry[cursor:]))
     return "".join(out).replace("\n", "<br>")
+
+
+def _quote_pattern(quote: str) -> str:
+    """A pattern that finds the quote the way the audit does: ignoring case, typography and spacing."""
+    text = unicodedata.normalize("NFKC", quote).translate(_PUNCTUATION).strip(" \"'.,;:!?…")
+    parts = []
+    for token in re.split(r"(\s+)", text):
+        if token.isspace():
+            parts.append(r"\s+")
+        elif token:
+            parts.append("".join(_VARIANTS.get(ch, re.escape(ch)) for ch in token))
+    return "".join(parts)
 
 
 def edit_share(original: str, final: str) -> float:

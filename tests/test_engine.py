@@ -356,3 +356,43 @@ def test_alternatives_are_always_deliverable_and_honest():
                             changed = dropped or pkg.headcount != n or pkg.duration_hours != duration
                             assert alt.changes_requirement == bool(changed)
                             assert alt.trade_offs
+
+
+# --- Regressions -------------------------------------------------------------------------------------
+
+
+def test_required_studio_with_step_free_access_still_gets_options():
+    # The Studio has stairs, so it can never host this group; the Loft needs a bigger budget.
+    studio = VenueWish(venue_id="V1", need="required")
+    a = assess(brief(11, required=["S1"], budget=45, access="required", venue=studio), CAT)
+    assert a.route == "infeasible"
+    assert [alt.label for alt in a.alternatives] == ["Use the Loft instead of the Studio, and increase the budget to €508"]
+    alt = a.alternatives[0]
+    assert alt.package.total == 508  # 420 + 11 x 8
+    assert alt.trade_offs[0] == "A different venue from the one requested." and alt.changes_requirement
+
+
+def test_required_studio_for_a_large_step_free_group_offers_the_loft_at_capacity():
+    studio = VenueWish(venue_id="V1", need="required")
+    a = assess(brief(42, required=["S1"], access="required", venue=studio), CAT)
+    assert a.alternatives[0].label == "Use the Loft instead of the Studio, and limit attendance to 24"
+    assert a.alternatives[0].package.total == 612  # 420 + 24 x 8
+    assert "18 fewer attendees than requested." in a.alternatives[0].trade_offs
+
+
+def test_every_infeasible_brief_offers_at_least_one_deliverable_option():
+    for venue in (None, VenueWish(venue_id="V1", need="required"), VenueWish(venue_id="V2", need="required")):
+        for n in (5, 12, 13, 20, 30):
+            for services in SUBSETS:
+                for budget in (None, 45, 400, 900):
+                    for access in ("required", "not_needed"):
+                        for duration in (4, 6):
+                            extra = {"venue": venue} if venue else {}
+                            a = assess(brief(n, hours=duration, required=services, budget=budget, access=access, **extra), CAT)
+                            if a.route != "infeasible":
+                                continue
+                            assert a.alternatives, a.headline
+                            for alt in a.alternatives:
+                                _, cap, step_free = VENUES[alt.package.venue_id]
+                                assert alt.package.headcount <= cap and alt.package.duration_hours <= 4
+                                assert step_free or access != "required"

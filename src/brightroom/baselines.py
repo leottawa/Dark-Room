@@ -8,6 +8,9 @@ strongest fair competitor to the pipeline. Both use the same model and the same 
 from __future__ import annotations
 
 import json
+from typing import Literal
+
+from pydantic import BaseModel, ValidationError
 
 from .catalogue import Catalogue, money
 from .llm import LLMClient, LLMResult
@@ -95,24 +98,72 @@ Fields:
 Return only the JSON object."""
 
 
-def grade_reply(enquiry: str, reply: str, client: LLMClient, cat: Catalogue) -> tuple[Outcome, LLMResult]:
-    """Reduce a free-text reply to the same Outcome the pipeline is scored on."""
+class GradingError(RuntimeError):
+    """The grader could not audit a reply. Carries the calls made, so their cost is still counted."""
+
+    def __init__(self, message: str, calls: list[LLMResult]):
+        super().__init__(message)
+        self.calls = calls
+
+
+class _Audit(BaseModel):
+    kind: Literal["proposal", "cannot_meet", "clarification", "other"]
+    venue_id: str | None
+    service_ids: list[str]
+    stated_total: float | None
+    reasons: list[str]
+    flagged_assumptions: list[str]
+    asks_about: list[str]
+    declines: list[str]
+    alternative_totals: list[float]
+    venues_offered: list[str]
+    promises: list[str]
+
+
+def _parse_audit(text: str) -> _Audit:
+    text = text.strip()
+    if text.startswith("```"):
+        text = text.strip("`").removeprefix("json").strip()
+    try:
+        return _Audit.model_validate(json.loads(text))
+    except (json.JSONDecodeError, ValidationError) as exc:
+        raise ValueError(str(exc)[:300]) from exc
+
+
+def grade_reply(enquiry: str, reply: str, client: LLMClient, cat: Catalogue) -> tuple[Outcome, list[LLMResult]]:
+    """Reduce a free-text reply to the same Outcome the pipeline is scored on.
+
+    A malformed audit gets one corrective call, as in extraction: a grader slip must not be
+    scored as a failure of the baseline it was grading.
+    """
     system = GRADER_SYSTEM.format(business=cat.business, catalogue=catalogue_text(cat))
     user = f"Client enquiry:\n{enquiry.strip()}\n\nReply to audit:\n{reply.strip()}"
-    result = client.complete([{"role": "system", "content": system}, {"role": "user", "content": user}], schema=grader_schema(cat), schema_name="audit", max_tokens=600)
-    data = json.loads(result.text.strip().strip("`").removeprefix("json"))
-    route = {"proposal": "proposal", "cannot_meet": "infeasible", "clarification": "clarify"}.get(data["kind"], "other")
-    outcome = Outcome(
-        route=route,
-        venue=data["venue_id"],
-        services=data["service_ids"],
-        total=data["stated_total"],
-        unmet=data["reasons"],
-        assumed=sorted(set(data["flagged_assumptions"])),
-        asked=data["asks_about"],
-        notices=data["declines"],
-        alternative_totals=data["alternative_totals"],
-        venues_offered=sorted(set(data["venues_offered"])),
-        promises=data["promises"],
-    )
-    return outcome, result
+    messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
+    calls: list[LLMResult] = []
+    for attempt in range(2):
+        result = client.complete(messages, schema=grader_schema(cat), schema_name="audit", max_tokens=600)
+        calls.append(result)
+        try:
+            data = _parse_audit(result.text)
+        except ValueError as exc:
+            messages = messages + [
+                {"role": "assistant", "content": result.text},
+                {"role": "user", "content": f"That was not a valid audit ({exc}). Return the corrected JSON object only, with every field."},
+            ]
+            continue
+        route = {"proposal": "proposal", "cannot_meet": "infeasible", "clarification": "clarify"}.get(data.kind, "other")
+        outcome = Outcome(
+            route=route,
+            venue=data.venue_id,
+            services=data.service_ids,
+            total=data.stated_total,
+            unmet=data.reasons,
+            assumed=sorted(set(data.flagged_assumptions)),
+            asked=data.asks_about,
+            notices=data.declines,
+            alternative_totals=data.alternative_totals,
+            venues_offered=sorted(set(data.venues_offered)),
+            promises=data.promises,
+        )
+        return outcome, calls
+    raise GradingError("The grader did not return a usable audit after two attempts.", calls)

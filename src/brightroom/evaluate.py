@@ -22,8 +22,9 @@ from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 
-from .baselines import grade_reply, run_baseline
+from .baselines import GradingError, grade_reply, run_baseline
 from .catalogue import Catalogue, load_catalogue
+from .extract import ExtractionError
 from .llm import DEFAULT_MODEL, LLMClient, OpenRouterClient
 from .pipeline import run_from_brief, run_pipeline
 from .scoring import Case, critical_error, extraction_errors, load_cases, outcome_from_run, score, usable
@@ -57,9 +58,18 @@ def run_case(case: Case, arm: str, client: LLMClient | None, grader: LLMClient |
             text = reply.text
             record |= {"seconds": reply.seconds, "cost": reply.cost, "llm_calls": 1, "tokens": reply.prompt_tokens + reply.completion_tokens}
             outcome, grading = grade_reply(case.enquiry, text, grader, cat)
-            record["grader_cost"] = grading.cost
+            record["grader_cost"] = sum(call.cost for call in grading)
     except Exception as error:  # a failed run is a result, not a reason to stop the evaluation
         record |= {"error": f"{type(error).__name__}: {error}", "usable": False, "critical": False, "checks": []}
+        calls = getattr(error, "calls", [])
+        if isinstance(error, ExtractionError):  # the pipeline paid for these calls before failing
+            record |= {
+                "cost": sum(c.cost for c in calls),
+                "llm_calls": len(calls),
+                "tokens": sum(c.prompt_tokens + c.completion_tokens for c in calls),
+            }
+        elif isinstance(error, GradingError):  # the baseline itself ran; only its audit failed
+            record |= {"grader_cost": sum(c.cost for c in calls), "grader_error": True}
         record["seconds"] = record["seconds"] or time.perf_counter() - started
         return record
     checks = score(case.expect, outcome)
@@ -78,6 +88,9 @@ def summarise(records: list[dict]) -> str:
             f"{arm:<18}{len(rows):>5}{share:>9.0%}{sum(r['critical'] for r in rows):>10}{sum('error' in r for r in rows):>8}"
             f"{statistics.median(r['seconds'] for r in rows):>10.2f}{statistics.mean(r['cost'] for r in rows):>11.6f}{statistics.mean(r['llm_calls'] for r in rows):>7.1f}"
         )
+    ungraded = sum(1 for r in records if r.get("grader_error"))
+    if ungraded:
+        lines.append(f"{ungraded} baseline run(s) could not be audited by the grader and count as errors above, not as baseline mistakes.")
     lines.append("")
     lines.append("Usable share by category")
     categories = sorted({r["category"] for r in records})

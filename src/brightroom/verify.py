@@ -57,10 +57,15 @@ def check_prose(prose: Prose, facts: dict, cat: Catalogue) -> list[Violation]:
         if match:
             violations.append(Violation(code="commitment", detail=f'Do not write "{match.group(0)}": the system adds notes on availability, bookings and prices.'))
 
-    for item in [*cat.venues, *cat.services]:
-        name = item.name.lower()
+    # Venue names are proper nouns ("the Loft") and are matched with their capital: BrightRoom calls
+    # itself a studio, so "our studio" must not count as offering the Studio venue.
+    for venue in cat.venues:
+        if re.search(rf"\b{re.escape(venue.name)}\b", text) and venue.name.lower() not in given:
+            violations.append(Violation(code="item_not_in_draft", detail=f'"{venue.name}" is not part of this draft.'))
+    for service in cat.services:
+        name = service.name.lower()
         if re.search(rf"\b{re.escape(name)}\b", lowered) and name not in given:
-            violations.append(Violation(code="item_not_in_draft", detail=f'"{item.name}" is not part of this draft.'))
+            violations.append(Violation(code="item_not_in_draft", detail=f'"{service.name}" is not part of this draft.'))
     for extra in _EXTRAS:
         if extra in lowered and extra not in given:
             violations.append(Violation(code="unlisted_item", detail=f'"{extra}" is not in the catalogue or the facts.'))
@@ -70,7 +75,8 @@ def check_prose(prose: Prose, facts: dict, cat: Catalogue) -> list[Violation]:
             violations.append(Violation(code="empty", detail=f"The {name} is empty."))
         if len(passage.split()) > MAX_WORDS:
             violations.append(Violation(code="too_long", detail=f"The {name} is longer than {MAX_WORDS} words."))
-        if "\n" in passage.strip() or re.search(r"^\s*[-*\d]+[.)]?\s", passage):
+        # A list marker is "-", "*", "•" or "1." / "1)"; a sentence may start with a number ("12 colleagues").
+        if "\n" in passage.strip() or re.search(r"^\s*(?:[-*•]|\d+[.)])\s", passage):
             violations.append(Violation(code="format", detail=f"The {name} must be plain sentences."))
     return violations
 

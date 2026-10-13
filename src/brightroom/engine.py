@@ -554,7 +554,20 @@ def _alternatives(spec: Spec, ev: Evaluation, cat: Catalogue, blocked: list[Unme
 
     pool = [v for v in cat.venues if spec.venue_id in (None, v.id) and (v.wheelchair_accessible or not spec.accessible)]
     if not pool:
-        return alternatives
+        if spec.venue_id:
+            # The requested venue can never meet the request (no step-free access), so the nearest
+            # options are found at the other venues, with the change of venue stated as a trade-off.
+            requested = cat.venue(spec.venue_id).name
+            free = replace(spec, venue_id=None)
+            for alt in _alternatives(free, evaluate(free, cat), cat, blocked):
+                key = (alt.package.venue_id, alt.package.headcount, alt.package.duration_hours, tuple(alt.package.service_ids))
+                if key in seen:
+                    continue
+                seen.add(key)
+                label = f"Use the {alt.package.venue_name} instead of the {requested}, and {_uncap(alt.label)}"
+                trade_offs = ["A different venue from the one requested.", *alt.trade_offs]
+                alternatives.append(Alternative(label=label, package=alt.package, trade_offs=trade_offs, changes_requirement=True))
+        return alternatives[:MAX_ALTERNATIVES]
     base, steps, forced = spec, [], []
     longest = max(v.duration_hours for v in pool)
     if base.duration > longest:

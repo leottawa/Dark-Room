@@ -6,6 +6,7 @@ leaves the tool: the salesperson approves, copies and sends by hand.
 
 from __future__ import annotations
 
+import os
 import time
 
 import streamlit as st
@@ -54,8 +55,9 @@ def show(result: RunResult, event: str) -> None:
 
 with st.sidebar:
     st.header("Settings")
-    model = st.text_input("Model (OpenRouter id)", value=DEFAULT_MODEL)
-    client = get_client(model, api_key_available())
+    key_present = api_key_available()  # also loads .env, so BRIGHTROOM_MODEL below is current
+    model = st.text_input("Model (OpenRouter id)", value=os.environ.get("BRIGHTROOM_MODEL") or DEFAULT_MODEL)
+    client = get_client(model, key_present)
     if client:
         st.caption(":green[:material/check_circle:] API key found")
     else:
@@ -156,15 +158,18 @@ with understood:
 
             lo, hi = (n_min or n_max or None), (n_max or n_min or None)
             old = brief
+            # The form shows an unstated budget basis as "total" (the engine reads it that way), so
+            # submitting it untouched must not count as an edit and drop the client's quote.
+            budget_same = (amount or None) == old.budget.amount and (not amount or basis == (old.budget.basis or "total"))
             new = Brief(
                 language=old.language,
                 headcount=Headcount(min=lo, max=hi, approximate=approximate, quote=keep("headcount", (lo, hi, approximate) == (old.headcount.min, old.headcount.max, old.headcount.approximate), old.headcount.quote)),
                 duration=Duration(hours=duration or None, quote=keep("duration", (duration or None) == old.duration.hours, old.duration.quote)),
                 budget=Budget(
                     amount=amount or None,
-                    basis=basis if amount else None,
+                    basis=old.budget.basis if budget_same else (basis if amount else None),
                     approximate=old.budget.approximate if amount else False,
-                    quote=keep("budget", (amount or None, basis if amount else None) == (old.budget.amount, old.budget.basis), old.budget.quote),
+                    quote=keep("budget", budget_same, old.budget.quote),
                 ),
                 accessibility=Accessibility(need=access, quote=keep("accessibility", access == old.accessibility.need, old.accessibility.quote)),
                 venue=VenueWish(

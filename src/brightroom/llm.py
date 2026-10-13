@@ -73,9 +73,14 @@ class OpenRouterClient:
                 continue
             if response.status_code != 200:
                 raise LLMError(f"OpenRouter HTTP {response.status_code}: {response.text[:300]}")
-            data = response.json()
-            if "error" in data or not data.get("choices"):
-                error = f"provider error: {str(data.get('error', data))[:200]}"
+            try:
+                data = response.json()
+            except ValueError:  # a gateway page or truncated body instead of JSON: retry
+                error = f"invalid JSON from OpenRouter: {response.text[:200]}"
+                continue
+            if not isinstance(data, dict) or "error" in data or not data.get("choices"):
+                detail = data.get("error", data) if isinstance(data, dict) else data
+                error = f"provider error: {str(detail)[:200]}"
                 continue
             usage = data.get("usage") or {}
             return LLMResult(

@@ -94,8 +94,9 @@ def prose_facts(assessment: Assessment, brief: Brief, cat: Catalogue) -> dict:
 
 def template_prose(assessment: Assessment, brief: Brief) -> Prose:
     """Fixed wording used when no model is available or its passages fail verification."""
-    n = brief.headcount.max
-    about = f" about a workshop for {n} people" if n else ""
+    lo, hi = brief.headcount.min, brief.headcount.max
+    people = None if hi is None else (f"{hi}" if lo in (None, hi) else f"{min(lo, hi)} to {max(lo, hi)}")
+    about = f" about a workshop for {people} people" if people else ""
     opening = f"Thank you for your enquiry{about}."
     if assessment.route == "proposal":
         body = "Please find below a draft package based on what you told us."
@@ -168,6 +169,9 @@ def render_draft(assessment: Assessment, brief: Brief, prose: Prose, cat: Catalo
         budget = next((c for c in a.checks if c.name == "budget"), None)
         if budget and budget.status == "pass":
             block.append(budget.detail)
+        duration = next((c for c in a.checks if c.name == "duration"), None)
+        if duration and pkg.duration_hours < cat.venue(pkg.venue_id).duration_hours:
+            block.append(duration.detail)  # a shorter event still pays for the full session
         block.append(cat.price_note)
         out += _section(f"Proposed package for {pkg.headcount} attendees, {hours(pkg.duration_hours)}-hour session", block)
         out += _section("Our assumptions", assumptions)

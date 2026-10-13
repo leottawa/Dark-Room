@@ -13,6 +13,7 @@ from brightroom.models import Accessibility, Brief, Budget, DateMention, Duratio
 from brightroom.pipeline import run_from_brief, run_pipeline
 from brightroom.textutil import numbers_in, quote_in
 from brightroom.verify import check_draft, check_prose
+from brightroom.view import highlight
 
 CAT = load_catalogue()
 Q1 = "10 people, 4 hours, coffee for everyone. Maximum budget €350."
@@ -249,3 +250,69 @@ def test_edited_brief_reruns_without_a_model():
     result = run_from_brief(Q1, brief, None, CAT)
     assert result.assessment.route == "infeasible"  # the Loft at €500 is over the €350 budget
     assert result.prose_source == "template" and result.llm_calls == 0
+
+
+# --- Regressions -------------------------------------------------------------------------------------
+
+
+def loft_brief() -> Brief:
+    return Brief(
+        headcount=Headcount(min=20, max=20, quote="20 people"),
+        duration=Duration(hours=4, quote="4 hours"),
+        budget=Budget(amount=700, basis="total", quote="Budget €700"),
+        services=[ServiceWish(service_id="S1", need="required", quote="coffee")],
+    )
+
+
+@pytest.mark.parametrize(
+    "opening",
+    [
+        "Thank you for thinking of our studio for your team's workshop.",  # BrightRoom calls itself a studio
+        "20 colleagues for a workshop sounds wonderful, and thank you for your enquiry.",  # not a list item
+    ],
+)
+def test_verifier_does_not_reject_ordinary_sentences(opening):
+    _, facts = facts_for(loft_brief())
+    prose = Prose(opening=opening, body="A draft package matching your request follows.", closing="We look forward to hearing from you.")
+    assert check_prose(prose, facts, CAT) == []
+
+
+@pytest.mark.parametrize("body, code", [("The Studio would suit your team.", "item_not_in_draft"), ("1. Loft\n2. Coffee", "format"), ("- Loft", "format")])
+def test_verifier_still_catches_the_other_venue_and_lists(body, code):
+    _, facts = facts_for(loft_brief())
+    prose = Prose(opening="Thank you for your enquiry.", body=body, closing="We look forward to hearing from you.")
+    assert code in [v.code for v in check_prose(prose, facts, CAT)]
+
+
+def test_short_event_draft_says_it_is_priced_as_a_full_session():
+    brief = q1_brief()
+    brief.duration = Duration(hours=2, quote="2 hours")
+    assessment = assess(brief, CAT)
+    draft = render_draft(assessment, brief, template_prose(assessment, brief), CAT)
+    assert "2 hours requested; venues are booked as 4-hour sessions at the listed price." in draft
+    assert check_draft(draft, assessment) == []
+
+
+def test_template_prose_states_a_headcount_range_as_a_range():
+    brief = Brief(headcount=Headcount(min=10, max=14), duration=Duration(hours=4))
+    assessment = assess(brief, CAT)
+    assert template_prose(assessment, brief).opening == "Thank you for your enquiry about a workshop for 10 to 14 people."
+
+
+def test_highlight_finds_quotes_whatever_the_typography():
+    enquiry = "Hi — we’re 12 people,  for 4 hours."
+    assert highlight(enquiry, ["we're 12 people", "for 4 hours."]) == "Hi — <mark>we’re 12 people</mark>,  <mark>for 4 hours</mark>."
+    assert highlight("<b>10</b> people", ["10"]) == "&lt;b&gt;<mark>10</mark>&lt;/b&gt; people"
+
+
+def test_openrouter_client_retries_a_body_that_is_not_json(monkeypatch):
+    import httpx
+
+    from brightroom import llm
+
+    replies = iter([httpx.Response(200, text="<html>Bad gateway</html>"), httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}], "usage": {"cost": 0.001}})])
+    monkeypatch.setattr(llm.time, "sleep", lambda seconds: None)
+    client = llm.OpenRouterClient(api_key="test")
+    client._http = httpx.Client(transport=httpx.MockTransport(lambda request: next(replies)))
+    result = client.complete([{"role": "user", "content": "hi"}])
+    assert result.text == "ok" and result.cost == 0.001
