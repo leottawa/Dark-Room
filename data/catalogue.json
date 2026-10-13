@@ -1,0 +1,125 @@
+{
+  "business": "BrightRoom",
+  "currency_symbol": "€",
+  "price_note": "All prices are total amounts in euros: no taxes or other fees are added.",
+  "terms": "Select one venue; flat-price items can be added once. Per-person services cover the full headcount. No longer-duration price or discount is available. Dates require a separate availability check.",
+  "venues": [
+    {
+      "id": "V1",
+      "name": "Studio",
+      "price": 240,
+      "duration_hours": 4,
+      "max_people": 12,
+      "wheelchair_accessible": false,
+      "access_note": "stairs only",
+      "included": [
+        "Wi-Fi"
+      ],
+      "keywords": [
+        "studio"
+      ]
+    },
+    {
+      "id": "V2",
+      "name": "Loft",
+      "price": 420,
+      "duration_hours": 4,
+      "max_people": 24,
+      "wheelchair_accessible": true,
+      "access_note": "wheelchair accessible",
+      "included": [
+        "Wi-Fi"
+      ],
+      "keywords": [
+        "loft"
+      ]
+    }
+  ],
+  "services": [
+    {
+      "id": "S1",
+      "name": "Coffee break",
+      "pricing": "per_person",
+      "price": 8,
+      "conditions": "One coffee break for every attendee.",
+      "keywords": [
+        "coffee",
+        "café",
+        "cafe"
+      ]
+    },
+    {
+      "id": "S2",
+      "name": "Lunch",
+      "pricing": "per_person",
+      "price": 18,
+      "conditions": "One lunch for every attendee; vegetarian/vegan on request. No allergen guarantee is supplied.",
+      "keywords": [
+        "lunch",
+        "déjeuner",
+        "dejeuner",
+        "repas"
+      ]
+    },
+    {
+      "id": "S3",
+      "name": "Projector",
+      "pricing": "flat",
+      "price": 35,
+      "conditions": "One projector for the booking.",
+      "keywords": [
+        "projector",
+        "beamer",
+        "projecteur",
+        "vidéoprojecteur"
+      ]
+    },
+    {
+      "id": "S4",
+      "name": "Facilitator",
+      "pricing": "flat",
+      "price": 280,
+      "conditions": "One facilitator for 2 hours.",
+      "keywords": [
+        "facilitator",
+        "facilitation",
+        "facilitate",
+        "animateur",
+        "facilitateur"
+      ]
+    }
+  ],
+  "policies": {
+    "date": {
+      "offerable": false,
+      "statement": "Dates are not held or promised at this stage: they require a separate availability check."
+    },
+    "booking_or_date_confirmation": {
+      "offerable": false,
+      "statement": "We cannot confirm or book at this stage: this is a draft, and dates require a separate availability check."
+    },
+    "discount": {
+      "offerable": false,
+      "statement": "No discount is available: catalogue prices apply."
+    },
+    "allergen_guarantee": {
+      "offerable": false,
+      "statement": "No allergen guarantee can be supplied for catering.",
+      "blocks_when_required": true
+    },
+    "vegetarian_vegan": {
+      "offerable": true,
+      "requires_service": "S2",
+      "statement": "Vegetarian and vegan lunches are available on request."
+    },
+    "unlisted_service": {
+      "offerable": false,
+      "statement": "This is not part of our catalogue and cannot be included.",
+      "blocks_when_required": true
+    },
+    "other": {
+      "offerable": false,
+      "statement": "This falls outside our catalogue and needs a decision from the salesperson."
+    }
+  }
+}
