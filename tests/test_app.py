@@ -119,3 +119,97 @@ def test_every_verdict_renders_its_card_figures_and_draft(route, monkeypatch, tm
     assert label in page and 'class="br-figures"' in page
     assert ('class="br-option"' in page) == bool(result.assessment.alternatives)
     assert "Subject:" not in page  # the preview shows the subject in the email header, not as a body line
+
+
+# --- Public deployment: the owner's demo key and keys pasted by visitors ---------------------------------
+
+DEMO_KEY = "sk-or-v1-demo-key-for-tests-0123456789"
+
+
+@pytest.fixture
+def fresh(monkeypatch, tmp_path):
+    """A clean server: no key in the environment, empty shared caches, audit logs in a temp folder."""
+    import streamlit as st
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "")
+    monkeypatch.delenv("BRIGHTROOM_MODEL", raising=False)
+    monkeypatch.chdir(tmp_path)
+    st.cache_resource.clear()
+    yield monkeypatch
+    st.cache_resource.clear()
+
+
+def rendered(app) -> str:
+    """Everything a visitor can read on the page, apart from what they typed into the key field."""
+    parts = [m.value for m in app.markdown] + [c.value for c in app.caption] + [html(app)]
+    parts += [t.value for t in app.text_input if "API key" not in t.label] + [t.value for t in app.text_area]
+    return "\n".join(str(p) for p in parts)
+
+
+def key_box(app):
+    return next(t for t in app.text_input if "API key" in t.label)
+
+
+def model_box(app):
+    return next(t for t in app.text_input if t.label.startswith("Model"))
+
+
+def test_demo_key_locks_the_model_and_is_never_shown(fresh):
+    fresh.setenv("OPENROUTER_API_KEY", DEMO_KEY)
+    app = AppTest.from_file(APP, default_timeout=30).run()
+    assert not app.exception
+    assert model_box(app).disabled and model_box(app).value == "mistralai/mistral-small-3.2-24b-instruct"
+    assert key_box(app).value == "" and "optional" in key_box(app).label
+    assert "Demo key active" in rendered(app) and "15 model runs left" in rendered(app)
+    assert DEMO_KEY not in rendered(app)
+    app.text_area(key="enquiry").set_value("10 people, coffee, budget 350").run()
+    assert not button(app, "Prepare draft").disabled
+
+
+def test_demo_key_can_come_from_streamlit_secrets(fresh):
+    app = AppTest.from_file(APP, default_timeout=30)
+    app.secrets["OPENROUTER_API_KEY"] = DEMO_KEY
+    app.run()
+    assert not app.exception and "Demo key active" in rendered(app)
+
+
+def test_a_pasted_key_unlocks_the_model_and_stays_in_the_session(fresh):
+    fresh.setenv("OPENROUTER_API_KEY", DEMO_KEY)
+    app = AppTest.from_file(APP, default_timeout=30).run()
+    key_box(app).set_value("sk-or-v1-visitor-key").run()
+    assert not model_box(app).disabled
+    assert app.session_state["own_client"].api_key == "sk-or-v1-visitor-key"
+    assert "Using your key" in rendered(app) and "sk-or-v1-visitor-key" not in rendered(app)
+    other = AppTest.from_file(APP, default_timeout=30).run()  # another visitor's session
+    assert "own_client" not in other.session_state and "Demo key active" in rendered(other)
+
+
+def test_without_any_key_the_brief_can_still_be_entered_by_hand(fresh):
+    app = AppTest.from_file(APP, default_timeout=30).run()
+    assert "No API key" in rendered(app) and not model_box(app).disabled
+    app.text_area(key="enquiry").set_value("10 people").run()
+    assert button(app, "Prepare draft").disabled and not button(app, "Enter brief by hand").disabled
+
+
+def test_the_demo_limit_stops_model_runs(fresh):
+    fresh.setenv("OPENROUTER_API_KEY", DEMO_KEY)
+    fresh.setenv("BRIGHTROOM_DEMO_RUNS_PER_SESSION", "0")
+    app = AppTest.from_file(APP, default_timeout=30).run()
+    app.text_area(key="enquiry").set_value("10 people").run()
+    assert "Demo limit reached" in rendered(app) and button(app, "Prepare draft").disabled
+
+
+def test_a_rejected_key_is_explained_and_the_demo_run_is_counted(fresh):
+    from brightroom import llm
+
+    def reject(self, *args, **kwargs):
+        raise llm.LLMError('OpenRouter HTTP 401: {"error":{"message":"User not found.","code":401}}')
+
+    fresh.setattr(llm.OpenRouterClient, "complete", reject)
+    fresh.setenv("OPENROUTER_API_KEY", DEMO_KEY)
+    app = AppTest.from_file(APP, default_timeout=30).run()
+    app.text_area(key="enquiry").set_value("10 people, coffee, budget 350").run()
+    button(app, "Prepare draft").click().run()
+    assert not app.exception
+    assert "OpenRouter rejected the API key" in app.error[0].value
+    assert app.session_state["demo_runs"] == 1 and "14 model runs left" in rendered(app)

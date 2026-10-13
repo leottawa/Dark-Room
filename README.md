@@ -20,7 +20,33 @@ uv run streamlit run app/streamlit_app.py
 ```
 
 Without a key the app still works from a brief entered by hand: only the reading of the enquiry
-and the connecting sentences of the email use the model.
+and the connecting sentences of the email use the model. Anyone can also paste their own OpenRouter
+key in the sidebar; it is used for their browser session only and never saved.
+
+## Put it online
+
+The app runs on [Streamlit Community Cloud](https://share.streamlit.io) straight from this repository.
+
+1. Sign in with GitHub and choose **Create app**, then **Deploy a public app from GitHub**.
+2. Repository `leottawa/Dark-Room`, branch `main`, main file path `app/streamlit_app.py`.
+3. Open **Advanced settings**, choose Python 3.12, and paste the secrets:
+
+   ```toml
+   OPENROUTER_API_KEY = "sk-or-v1-..."   # the demo key every visitor uses; never commit it
+   # Optional:
+   # BRIGHTROOM_MODEL = "mistralai/mistral-small-3.2-24b-instruct"
+   # BRIGHTROOM_DEMO_RUNS_PER_SESSION = 15
+   # BRIGHTROOM_DEMO_RUNS_PER_DAY = 300
+   ```
+
+4. Deploy. Secrets can be changed later in the app's settings.
+
+The demo key pays for every visitor, so the app protects it: its model is fixed, each visitor
+gets a limited number of model runs per session, and the whole app a limited number per day. A
+run costs about $0.0002 with the default model. Also set a credit limit on the key itself at
+[openrouter.ai/keys](https://openrouter.ai/keys). Visitors who paste their own key have no limit and
+can choose any OpenRouter model. Enquiries are sent to OpenRouter to be read, so the sidebar asks
+visitors to use fictional data.
 
 ## Test it
 

@@ -6,18 +6,28 @@ leaves the tool: the salesperson approves, copies and sends by hand.
 
 from __future__ import annotations
 
+import hashlib
 import os
+import sys
+import threading
 import time
+from datetime import date
 from pathlib import Path
 
 import streamlit as st
 
-from brightroom.catalogue import hours, load_catalogue, money
-from brightroom.extract import ExtractionError
-from brightroom.llm import DEFAULT_MODEL, LLMError, OpenRouterClient, api_key_available
-from brightroom.models import Accessibility, Assessment, Brief, Budget, DateMention, Duration, Headcount, OtherRequest, ServiceWish, VenueWish
-from brightroom.pipeline import RunResult, run_from_brief, run_pipeline, save_run
-from brightroom.view import (
+# The package lives in src/. Put it on the path so the app also runs where the project itself is not
+# installed: Streamlit Community Cloud, or `streamlit run app/streamlit_app.py` from a plain checkout.
+SRC = Path(__file__).resolve().parents[1] / "src"
+if SRC.is_dir() and str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
+
+from brightroom.catalogue import hours, load_catalogue, money  # noqa: E402
+from brightroom.extract import ExtractionError  # noqa: E402
+from brightroom.llm import DEFAULT_MODEL, LLMError, OpenRouterClient, api_key_available  # noqa: E402
+from brightroom.models import Accessibility, Assessment, Brief, Budget, DateMention, Duration, Headcount, OtherRequest, ServiceWish, VenueWish  # noqa: E402
+from brightroom.pipeline import RunResult, run_from_brief, run_pipeline, save_run  # noqa: E402
+from brightroom.view import (  # noqa: E402
     STEPS,
     brief_html,
     brief_rows,
@@ -74,12 +84,84 @@ state.setdefault("version", 0)
 state.setdefault("enquiry", "")
 state.setdefault("approved", None)
 state.setdefault("flash", None)
+state.setdefault("demo_runs", 0)
+
+
+def setting(name: str, default: str = "") -> str:
+    """A value from Streamlit secrets (when deployed) or from the environment / local .env file."""
+    try:
+        value = st.secrets.get(name)
+    except Exception:  # no secrets.toml: running locally
+        value = None
+    if value is None or str(value).strip() == "":
+        value = os.environ.get(name, default)
+    return str(value).strip()
+
+
+def demo_key() -> str:
+    """The owner's OpenRouter key, set as a deployment secret or in .env. Never shown or logged."""
+    api_key_available()  # loads a local .env into the environment, if there is one
+    return setting("OPENROUTER_API_KEY")
+
+
+def int_setting(name: str, default: int) -> int:
+    try:
+        return max(0, int(float(setting(name, str(default)))))
+    except ValueError:
+        return default
+
+
+# The demo key pays for every visitor, so its model is fixed and its use is capped. A run costs about
+# $0.0002 with the default model, so the daily cap bounds the spend at a few cents a day.
+DEMO_MODEL = setting("BRIGHTROOM_MODEL", DEFAULT_MODEL) or DEFAULT_MODEL
+DEMO_RUNS_PER_SESSION = int_setting("BRIGHTROOM_DEMO_RUNS_PER_SESSION", 15)
+DEMO_RUNS_PER_DAY = int_setting("BRIGHTROOM_DEMO_RUNS_PER_DAY", 300)
 
 
 @st.cache_resource
-def get_client(model: str, key_present: bool) -> OpenRouterClient | None:
-    # key_present is part of the cache key so that adding the key to .env takes effect on reload.
-    return OpenRouterClient(model=model) if key_present else None
+def demo_client(model: str, fingerprint: str) -> OpenRouterClient:
+    # Shared by every visitor. The key is read here rather than passed in, so it never becomes a
+    # cache key; the fingerprint only makes a changed key take effect.
+    return OpenRouterClient(api_key=demo_key(), model=model)
+
+
+@st.cache_resource
+def demo_usage() -> dict:
+    """Model runs on the demo key today, across all visitors of this server."""
+    return {"lock": threading.Lock(), "day": date.today().isoformat(), "runs": 0}
+
+
+def demo_runs_left() -> int:
+    usage = demo_usage()
+    with usage["lock"]:
+        if usage["day"] != date.today().isoformat():
+            usage["day"], usage["runs"] = date.today().isoformat(), 0
+        left_today = DEMO_RUNS_PER_DAY - usage["runs"]
+    return max(0, min(left_today, DEMO_RUNS_PER_SESSION - state.demo_runs))
+
+
+def spend_demo_run() -> None:
+    usage = demo_usage()
+    with usage["lock"]:
+        usage["runs"] += 1
+    state.demo_runs += 1
+
+
+def own_client(api_key: str, model: str) -> OpenRouterClient:
+    """A client for a key the visitor pasted: kept in their session only, never in a shared cache."""
+    current = state.get("own_client")
+    if current is None or current.api_key != api_key or current.model != model:
+        state.own_client = OpenRouterClient(api_key=api_key, model=model)
+    return state.own_client
+
+
+def failure_reason(error: Exception) -> str:
+    text = str(error)
+    if "HTTP 401" in text:
+        return "OpenRouter rejected the API key: check it and try again"
+    if "HTTP 402" in text:
+        return "the OpenRouter account has no credit left"
+    return text
 
 
 def show(result: RunResult, event: str) -> None:
@@ -197,15 +279,41 @@ def assessment_html(a: Assessment) -> str:
 
 with st.sidebar:
     st.html(sidebar_brand_html())
-    st.html('<div class="br-side-label">Model</div>')
-    key_present = api_key_available()  # also loads .env, so BRIGHTROOM_MODEL below is current
-    model = st.text_input("Model (OpenRouter id)", value=os.environ.get("BRIGHTROOM_MODEL") or DEFAULT_MODEL)
-    client = get_client(model, key_present)
-    if client:
-        st.badge("API key found", icon=":material/check_circle:", color="green")
+    st.html('<div class="br-side-label">Model access</div>')
+    server_key = demo_key()
+    pasted = st.text_input(
+        "Your OpenRouter API key" + (" (optional)" if server_key else ""),
+        type="password",
+        key="own_key",
+        placeholder="sk-or-v1-…",
+        help="Used only in this browser session to call OpenRouter. It is not saved, logged or shared.",
+    ).strip()
+    locked = bool(server_key) and not pasted
+    typed_model = st.text_input(
+        "Model (OpenRouter id)",
+        value=DEMO_MODEL,
+        disabled=locked,
+        key="model_locked" if locked else "model_own",  # the locked field always shows the demo model
+        help="The demo key always uses this model. Paste your own key to choose another." if locked else None,
+    ).strip()
+    using_demo = False
+    if pasted:
+        client = own_client(pasted, typed_model or DEMO_MODEL)
+        st.badge("Using your key", icon=":material/key:", color="green")
+    elif server_key and demo_runs_left() > 0:
+        client = demo_client(DEMO_MODEL, hashlib.sha256(server_key.encode()).hexdigest()[:12])
+        using_demo = True
+        left = demo_runs_left()
+        st.badge("Demo key active", icon=":material/check_circle:", color="green")
+        st.caption(f"{left} model run{'s' if left != 1 else ''} left in this session on the demo key. Paste your own key for more, or to choose another model.")
+    elif server_key:
+        client = None
+        st.badge("Demo limit reached", icon=":material/hourglass_empty:", color="orange")
+        st.caption("Paste your own OpenRouter key to continue, or enter a brief by hand.")
     else:
+        client = None
         st.badge("No API key", icon=":material/warning:", color="orange")
-        st.caption("Add OPENROUTER_API_KEY to .env. You can still enter a brief by hand.")
+        st.caption("Paste an OpenRouter key above ([get one](https://openrouter.ai/keys)), or enter a brief by hand.")
     prose_mode = st.radio(
         "Connecting sentences",
         ["model", "template"],
@@ -218,7 +326,8 @@ with st.sidebar:
         "- It does not send anything: you copy the approved draft yourself.\n"
         "- It does not check availability, hold dates or book venues.\n"
         "- It offers nothing outside the catalogue: no discounts, no unlisted services.\n"
-        "- It can misread an enquiry: compare the brief with the client's words."
+        "- It can misread an enquiry: compare the brief with the client's words.\n"
+        "- Enquiries are sent to OpenRouter to be read: use fictional data."
     )
 
 # --- Header and enquiry ---------------------------------------------------------------------------------
@@ -238,12 +347,14 @@ with st.container(border=True):
     if not client:
         st.caption(":material/info: Without an API key the model cannot read enquiries: enter the brief by hand instead.")
     if prepare:
+        if using_demo:
+            spend_demo_run()
         try:
             with st.spinner("Reading the enquiry and preparing the draft…"):
                 show(run_pipeline(enquiry, client, CAT, prose_mode), "draft")
         except (ExtractionError, LLMError) as error:
             show(run_from_brief(enquiry, Brief(), None, CAT, "template"), "manual")
-            state.flash = f"The enquiry could not be read automatically ({error}). Enter the brief by hand below."
+            state.flash = f"The enquiry could not be read automatically ({failure_reason(error)}). Enter the brief by hand below."
         st.rerun()
     if manual:
         show(run_from_brief(enquiry, Brief(), None, CAT, "template"), "manual")
@@ -349,6 +460,8 @@ with understood:
             changed |= {f"services.{sid}" for sid in current if choices[sid] == "not requested"}
             other_changed = len(new.other_requests) != len(old.other_requests) or bool(new_text.strip())
             issues = [i for i in result.issues if i.field not in changed and not (other_changed and i.field.startswith("other_requests"))]
+            if using_demo and prose_mode == "model":
+                spend_demo_run()
             with st.spinner("Recalculating…"):
                 show(run_from_brief(result.enquiry, new, client, CAT, prose_mode, issues), "corrected")
             st.rerun()
